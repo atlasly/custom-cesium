@@ -1142,17 +1142,6 @@ Either specify options.terrainProvider instead or set options.baseLayerPicker to
             set : function(value) {
                 if (this._selectedEntity !== value) {
                     this._selectedEntity = value;
-                    var selectionIndicatorViewModel = defined(this._selectionIndicator) ? this._selectionIndicator.viewModel : undefined;
-                    if (defined(value)) {
-                        if (defined(selectionIndicatorViewModel)) {
-                            selectionIndicatorViewModel.animateAppear();
-                        }
-                    } else {
-                        // Leave the info text in place here, it is needed during the exit animation.
-                        if (defined(selectionIndicatorViewModel)) {
-                            selectionIndicatorViewModel.animateDepart();
-                        }
-                    }
                 }
             }
         },
@@ -1453,9 +1442,10 @@ Either specify options.terrainProvider instead or set options.baseLayerPicker to
         }
 
         var selectionIndicatorViewModel = defined(this._selectionIndicator) ? this._selectionIndicator.viewModel : undefined;
-        if (defined(selectionIndicatorViewModel)) {
-            selectionIndicatorViewModel.position = Cartesian3.clone(position, selectionIndicatorViewModel.position);
-            selectionIndicatorViewModel.showSelection = showSelection && enableCamera;
+        if (defined(selectionIndicatorViewModel) && defined(this.selectionIndicatorEntity)) {
+			var selectionIndicatorEntityPosition = this.selectionIndicatorEntity.position.getValue(time, position);
+			
+            selectionIndicatorViewModel.position = Cartesian3.clone(selectionIndicatorEntityPosition, selectionIndicatorViewModel.position);
             selectionIndicatorViewModel.update();
         }
 
@@ -1569,6 +1559,32 @@ Either specify options.terrainProvider instead or set options.baseLayerPicker to
         }
     };
 
+	/**
+     * Sets selection indicator on entity
+     */
+    Viewer.prototype.showSelectionIndicator = function(entity) {
+		console.log("showSelectionIndicator");
+		
+		this.selectionIndicatorEntity = entity;
+
+		var selectionIndicatorViewModel = defined(this._selectionIndicator) ? this._selectionIndicator.viewModel : undefined;
+		if (defined(selectionIndicatorViewModel)) {
+			selectionIndicatorViewModel.animateAppear();
+        }
+    };
+
+	/**
+     * Hides selection indicator
+     */
+    Viewer.prototype.hideSelectionIndicator = function() {
+		this.selectionIndicatorEntity = undefined;
+		
+		var selectionIndicatorViewModel = defined(this._selectionIndicator) ? this._selectionIndicator.viewModel : undefined;
+        if (defined(selectionIndicatorViewModel)) {
+			selectionIndicatorViewModel.animateDepart();
+        }
+    };
+	
     /**
      * Asynchronously sets the camera to view the provided entity, entities, or data source.
      * If the data source is still in the process of loading or the visualization is otherwise still loading,

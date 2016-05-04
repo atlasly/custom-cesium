@@ -64,7 +64,7 @@ define([
          * Gets or sets the visibility of the selection indicator.
          * @type {Boolean}
          */
-        this.showSelection = false;
+        this.showSelection = true;
 
         knockout.track(this, ['position', '_screenPositionX', '_screenPositionY', '_scale', 'showSelection']);
 
