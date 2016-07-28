@@ -128,7 +128,15 @@ define([
             }
         }
     };
-
+	
+	SelectionIndicatorViewModel.prototype.hide = function() {
+		this._container.style.display = 'none'; 
+	}
+	
+	SelectionIndicatorViewModel.prototype.show = function() {
+		this._container.style.display = 'block'; 
+	}
+	
     /**
      * Animate the indicator to draw attention to the selection.
      */

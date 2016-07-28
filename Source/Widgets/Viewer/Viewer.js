@@ -1443,8 +1443,14 @@ Either specify options.terrainProvider instead or set options.baseLayerPicker to
 
         var selectionIndicatorViewModel = defined(this._selectionIndicator) ? this._selectionIndicator.viewModel : undefined;
         if (defined(selectionIndicatorViewModel) && defined(this.selectionIndicatorEntity)) {
-			var selectionIndicatorEntityPosition = this.selectionIndicatorEntity.position.getValue(time, position);
-			
+            var selectionIndicatorEntityPosition = undefined;
+            var state = this._dataSourceDisplay.getBoundingSphere(this.selectionIndicatorEntity, true, boundingSphereScratch);
+            if (state !== BoundingSphereState.FAILED) {
+                selectionIndicatorEntityPosition = boundingSphereScratch.center;
+            } else if (defined(this.selectionIndicatorEntity.position)) {
+                selectionIndicatorEntityPosition = this.selectionIndicatorEntity.position.getValue(time, position);
+            }
+
             selectionIndicatorViewModel.position = Cartesian3.clone(selectionIndicatorEntityPosition, selectionIndicatorViewModel.position);
             selectionIndicatorViewModel.update();
         }
@@ -1563,13 +1569,12 @@ Either specify options.terrainProvider instead or set options.baseLayerPicker to
      * Sets selection indicator on entity
      */
     Viewer.prototype.showSelectionIndicator = function(entity) {
-		console.log("showSelectionIndicator");
-		
 		this.selectionIndicatorEntity = entity;
 
 		var selectionIndicatorViewModel = defined(this._selectionIndicator) ? this._selectionIndicator.viewModel : undefined;
 		if (defined(selectionIndicatorViewModel)) {
 			selectionIndicatorViewModel.animateAppear();
+			selectionIndicatorViewModel.show();
         }
     };
 
@@ -1582,6 +1587,7 @@ Either specify options.terrainProvider instead or set options.baseLayerPicker to
 		var selectionIndicatorViewModel = defined(this._selectionIndicator) ? this._selectionIndicator.viewModel : undefined;
         if (defined(selectionIndicatorViewModel)) {
 			selectionIndicatorViewModel.animateDepart();
+			selectionIndicatorViewModel.hide();
         }
     };
 	
