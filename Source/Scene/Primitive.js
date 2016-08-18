@@ -9,6 +9,7 @@ define([
         '../Core/defaultValue',
         '../Core/defined',
         '../Core/defineProperties',
+        '../Core/deprecationWarning',
         '../Core/destroyObject',
         '../Core/DeveloperError',
         '../Core/FeatureDetection',
@@ -33,7 +34,8 @@ define([
         './Pass',
         './PrimitivePipeline',
         './PrimitiveState',
-        './SceneMode'
+        './SceneMode',
+        './ShadowMode'
     ], function(
         BoundingSphere,
         Cartesian2,
@@ -44,6 +46,7 @@ define([
         defaultValue,
         defined,
         defineProperties,
+        deprecationWarning,
         destroyObject,
         DeveloperError,
         FeatureDetection,
@@ -68,7 +71,8 @@ define([
         Pass,
         PrimitivePipeline,
         PrimitiveState,
-        SceneMode) {
+        SceneMode,
+        ShadowMode) {
     'use strict';
 
     /**
@@ -108,7 +112,9 @@ define([
      * @param {Boolean} [options.cull=true] When <code>true</code>, the renderer frustum culls and horizon culls the primitive's commands based on their bounding volume.  Set this to <code>false</code> for a small performance gain if you are manually culling the primitive.
      * @param {Boolean} [options.asynchronous=true] Determines if the primitive will be created asynchronously or block until ready.
      * @param {Boolean} [options.debugShowBoundingVolume=false] For debugging only. Determines if this primitive's commands' bounding spheres are shown.
-     *
+     * @param {Boolean} [options.castShadows=true] Deprecated, use options.shadows instead. Determines whether the primitive casts shadows from each light source.
+     * @param {Boolean} [options.receiveShadows=true] Deprecated, use options.shadows instead. Determines whether the primitive receives shadows from shadow casters in the scene.
+     * @param {ShadowMode} [options.shadows=ShadowMode.DISABLED] Determines whether this primitive casts or receives shadows from each light source.
      *
      * @example
      * // 1. Draw a translucent ellipse on the surface with a checkerboard pattern
@@ -175,7 +181,7 @@ define([
      *   }),
      *   appearance : new Cesium.PerInstanceColorAppearance()
      * }));
-     * 
+     *
      * @see GeometryInstance
      * @see Appearance
      */
@@ -275,13 +281,25 @@ define([
          * @private
          */
         this.rtcCenter = options.rtcCenter;
-        this._modifiedModelView = new Matrix4();
 
         //>>includeStart('debug', pragmas.debug);
         if (defined(this.rtcCenter) && (!defined(this.geometryInstances) || (isArray(this.geometryInstances) && this.geometryInstances !== 1))) {
             throw new DeveloperError('Relative-to-center rendering only supports one geometry instance.');
         }
         //>>includeEnd('debug');
+
+        // Deprecated options
+        var castShadows = defaultValue(options.castShadows, false);
+        var receiveShadows = defaultValue(options.receiveShadows, false);
+
+        /**
+         * Determines whether this primitive casts or receives shadows from each light source.
+         *
+         * @type {ShadowMode}
+         *
+         * @default ShadowMode.DISABLED
+         */
+        this.shadows = defaultValue(options.shadows, ShadowMode.fromCastReceive(castShadows, receiveShadows));
 
         this._translucent = undefined;
 
@@ -456,6 +474,46 @@ define([
         readyPromise : {
             get : function() {
                 return this._readyPromise.promise;
+            }
+        },
+
+        /**
+         * Determines whether the primitive casts shadows from each light source.
+         *
+         * @memberof Primitive.prototype
+         * @type {Boolean}
+         * @deprecated
+         */
+        castShadows : {
+            get : function() {
+                deprecationWarning('Primitive.castShadows', 'Primitive.castShadows was deprecated in Cesium 1.25. It will be removed in 1.26. Use Primitive.shadows instead.');
+                return ShadowMode.castShadows(this.shadows);
+            },
+            set : function(value) {
+                deprecationWarning('Primitive.castShadows', 'Primitive.castShadows was deprecated in Cesium 1.25. It will be removed in 1.26. Use Primitive.shadows instead.');
+                var castShadows = value;
+                var receiveShadows = ShadowMode.receiveShadows(this.shadows);
+                this.shadows = ShadowMode.fromCastReceive(castShadows, receiveShadows);
+            }
+        },
+
+        /**
+         * Determines whether the primitive receives shadows from shadow casters in the scene.
+         *
+         * @memberof Primitive.prototype
+         * @type {Boolean}
+         * @deprecated
+         */
+        receiveShadows : {
+            get : function() {
+                deprecationWarning('Primitive.receiveShadows', 'Primitive.receiveShadows was deprecated in Cesium 1.25. It will be removed in 1.26. Use Primitive.shadows instead.');
+                return ShadowMode.receiveShadows(this.shadows);
+            },
+            set : function(value) {
+                deprecationWarning('Primitive.receiveShadows', 'Primitive.receiveShadows was deprecated in Cesium 1.25. It will be removed in 1.26. Use Primitive.shadows instead.');
+                var castShadows = ShadowMode.castShadows(this.shadows);
+                var receiveShadows = value;
+                this.shadows = ShadowMode.fromCastReceive(castShadows, receiveShadows);
             }
         }
     });
@@ -1089,31 +1147,20 @@ define([
     function createShaderProgram(primitive, frameState, appearance) {
         var context = frameState.context;
 
+        var attributeLocations = primitive._attributeLocations;
+
         var vs = Primitive._modifyShaderPosition(primitive, appearance.vertexShaderSource, frameState.scene3DOnly);
         vs = Primitive._appendShowToShader(primitive, vs);
         vs = modifyForEncodedNormals(primitive, vs);
         var fs = appearance.getFragmentShaderSource();
 
-        var attributeLocations = primitive._attributeLocations;
-        primitive._sp = ShaderProgram.replaceCache({
-            context : context,
-            shaderProgram : primitive._sp,
-            vertexShaderSource : vs,
-            fragmentShaderSource : fs,
-            attributeLocations : attributeLocations
-        });
-        validateShaderMatching(primitive._sp, attributeLocations);
-
+        // Create pick program
         if (primitive.allowPicking) {
-            var pickFS = new ShaderSource({
-                sources : [fs],
-                pickColorQualifier : 'varying'
-            });
             primitive._pickSP = ShaderProgram.replaceCache({
                 context : context,
                 shaderProgram : primitive._pickSP,
                 vertexShaderSource : ShaderSource.createPickVertexShaderSource(vs),
-                fragmentShaderSource : pickFS,
+                fragmentShaderSource : ShaderSource.createPickFragmentShaderSource(fs, 'varying'),
                 attributeLocations : attributeLocations
             });
         } else {
@@ -1124,11 +1171,22 @@ define([
                 attributeLocations : attributeLocations
             });
         }
-
         validateShaderMatching(primitive._pickSP, attributeLocations);
+
+        primitive._sp = ShaderProgram.replaceCache({
+            context : context,
+            shaderProgram : primitive._sp,
+            vertexShaderSource : vs,
+            fragmentShaderSource : fs,
+            attributeLocations : attributeLocations
+        });
+        validateShaderMatching(primitive._sp, attributeLocations);
     }
 
-    function createCommands(primitive, appearance, material, translucent, twoPasses, colorCommands, pickCommands) {
+    var modifiedModelViewScratch = new Matrix4();
+    var rtcScratch = new Cartesian3();
+
+    function createCommands(primitive, appearance, material, translucent, twoPasses, colorCommands, pickCommands, frameState) {
         // Create uniform map by combining uniforms from the appearance and material if either have uniforms.
         var materialUniformMap = defined(material) ? material._uniforms : undefined;
         var appearanceUniformMap = {};
@@ -1150,7 +1208,11 @@ define([
 
         if (defined(primitive.rtcCenter)) {
             uniforms.u_modifiedModelView = function() {
-                return primitive._modifiedModelView;
+                var viewMatrix = frameState.context.uniformState.view;
+                Matrix4.multiply(viewMatrix, primitive._modelMatrix, modifiedModelViewScratch);
+                Matrix4.multiplyByPoint(modifiedModelViewScratch, primitive.rtcCenter, rtcScratch);
+                Matrix4.setTranslation(modifiedModelViewScratch, rtcScratch, modifiedModelViewScratch);
+                return modifiedModelViewScratch;
             };
         }
 
@@ -1264,8 +1326,6 @@ define([
         }
     }
 
-    var rtcScratch = new Cartesian3();
-
     function updateAndQueueCommands(primitive, frameState, colorCommands, pickCommands, modelMatrix, cull, debugShowBoundingVolume, twoPasses) {
         //>>includeStart('debug', pragmas.debug);
         if (frameState.mode !== SceneMode.SCENE3D && !Matrix4.equals(modelMatrix, Matrix4.IDENTITY)) {
@@ -1291,13 +1351,6 @@ define([
             }
         }
 
-        if (defined(primitive.rtcCenter)) {
-            var viewMatrix = frameState.camera.viewMatrix;
-            Matrix4.multiply(viewMatrix, primitive._modelMatrix, primitive._modifiedModelView);
-            Matrix4.multiplyByPoint(primitive._modifiedModelView, primitive.rtcCenter, rtcScratch);
-            Matrix4.setTranslation(primitive._modifiedModelView, rtcScratch, primitive._modifiedModelView);
-        }
-
         var boundingSpheres;
         if (frameState.mode === SceneMode.SCENE3D) {
             boundingSpheres = primitive._boundingSphereWC;
@@ -1312,26 +1365,32 @@ define([
         var commandList = frameState.commandList;
         var passes = frameState.passes;
         if (passes.render) {
+            var castShadows = ShadowMode.castShadows(primitive.shadows);
+            var receiveShadows = ShadowMode.receiveShadows(primitive.shadows);
             var colorLength = colorCommands.length;
             for (var j = 0; j < colorLength; ++j) {
                 var sphereIndex = twoPasses ? Math.floor(j / 2) : j;
-                colorCommands[j].modelMatrix = modelMatrix;
-                colorCommands[j].boundingVolume = boundingSpheres[sphereIndex];
-                colorCommands[j].cull = cull;
-                colorCommands[j].debugShowBoundingVolume = debugShowBoundingVolume;
+                var colorCommand = colorCommands[j];
+                colorCommand.modelMatrix = modelMatrix;
+                colorCommand.boundingVolume = boundingSpheres[sphereIndex];
+                colorCommand.cull = cull;
+                colorCommand.debugShowBoundingVolume = debugShowBoundingVolume;
+                colorCommand.castShadows = castShadows;
+                colorCommand.receiveShadows = receiveShadows;
 
-                commandList.push(colorCommands[j]);
+                commandList.push(colorCommand);
             }
         }
 
         if (passes.pick) {
             var pickLength = pickCommands.length;
             for (var k = 0; k < pickLength; ++k) {
-                pickCommands[k].modelMatrix = modelMatrix;
-                pickCommands[k].boundingVolume = boundingSpheres[k];
-                pickCommands[k].cull = cull;
+                var pickCommand = pickCommands[k];
+                pickCommand.modelMatrix = modelMatrix;
+                pickCommand.boundingVolume = boundingSpheres[k];
+                pickCommand.cull = cull;
 
-                commandList.push(pickCommands[k]);
+                commandList.push(pickCommand);
             }
         }
     }
@@ -1426,7 +1485,7 @@ define([
 
         if (createRS || createSP) {
             var commandFunc = defaultValue(this._createCommandsFunction, createCommands);
-            commandFunc(this, appearance, material, translucent, twoPasses, this._colorCommands, this._pickCommands);
+            commandFunc(this, appearance, material, translucent, twoPasses, this._colorCommands, this._pickCommands, frameState);
         }
 
         updatePerInstanceAttributes(this);
@@ -1463,7 +1522,7 @@ define([
     }
 
     var readOnlyInstanceAttributesScratch = ['boundingSphere', 'boundingSphereCV'];
-    
+
     /**
      * Returns the modifiable per-instance attributes for a {@link GeometryInstance}.
      *
@@ -1586,7 +1645,7 @@ define([
      *
      * @example
      * e = e && e.destroy();
-     * 
+     *
      * @see Primitive#isDestroyed
      */
     Primitive.prototype.destroy = function() {

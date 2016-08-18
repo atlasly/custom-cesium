@@ -77,10 +77,16 @@ defineSuite([
         context = scene.context;
 
         ellipsoid = Ellipsoid.WGS84;
+        return GroundPrimitive.initializeTerrainHeights();
     });
 
     afterAll(function() {
         scene.destroyForSpecs();
+
+        // Leave ground primitive uninitialized
+        GroundPrimitive._initialized = false;
+        GroundPrimitive._initPromise = undefined;
+        GroundPrimitive._terrainHeights = undefined;
     });
 
     function MockGlobePrimitive(primitive) {
@@ -405,6 +411,26 @@ defineSuite([
             geometryInstances : rectangleInstance,
             asynchronous : false,
             debugShowBoundingVolume : true
+        });
+
+        scene.groundPrimitives.add(primitive);
+        scene.camera.setView({ destination : rectangle });
+        var pixels = scene.renderForSpecs();
+        expect(pixels[1]).toBeGreaterThanOrEqualTo(0);
+        expect(pixels[1]).toBeGreaterThanOrEqualTo(0);
+        expect(pixels[2]).toBeGreaterThanOrEqualTo(0);
+        expect(pixels[3]).toEqual(255);
+    });
+
+    it('renders shadow volume with debugShowShadowVolume', function() {
+        if (!GroundPrimitive.isSupported(scene)) {
+            return;
+        }
+
+        primitive = new GroundPrimitive({
+            geometryInstances : rectangleInstance,
+            asynchronous : false,
+            debugShowShadowVolume : true
         });
 
         scene.groundPrimitives.add(primitive);
@@ -816,5 +842,25 @@ defineSuite([
 
         primitive.destroy();
         expect(primitive.isDestroyed()).toEqual(true);
+    });
+
+    it('creating a synchronous primitive throws if initializeTerrainHeights wasn\'t called', function() {
+        // Make it seem like initializeTerrainHeights was never called
+        var initPromise = GroundPrimitive._initPromise;
+        GroundPrimitive._initPromise = undefined;
+        GroundPrimitive._initialized = false;
+
+        primitive = new GroundPrimitive({
+            geometryInstances : rectangleInstance,
+            asynchronous : false
+        });
+        
+        expect(function() {
+            primitive.update(scene.frameState);
+        }).toThrowDeveloperError();
+
+        // Set back to initialized state
+        GroundPrimitive._initPromise = initPromise;
+        GroundPrimitive._initialized = true;
     });
 }, 'WebGL');

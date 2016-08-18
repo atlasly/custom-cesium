@@ -7,10 +7,12 @@ define([
         '../Core/defaultValue',
         '../Core/defined',
         '../Core/defineProperties',
+        '../Core/deprecationWarning',
         '../Core/destroyObject',
         '../Core/DeveloperError',
         '../Core/Ellipsoid',
         '../Core/EllipsoidTerrainProvider',
+        '../Core/Event',
         '../Core/GeographicProjection',
         '../Core/IntersectionTests',
         '../Core/loadImage',
@@ -26,7 +28,8 @@ define([
         './GlobeSurfaceTileProvider',
         './ImageryLayerCollection',
         './QuadtreePrimitive',
-        './SceneMode'
+        './SceneMode',
+        './ShadowMode'
     ], function(
         BoundingSphere,
         buildModuleUrl,
@@ -35,10 +38,12 @@ define([
         defaultValue,
         defined,
         defineProperties,
+        deprecationWarning,
         destroyObject,
         DeveloperError,
         Ellipsoid,
         EllipsoidTerrainProvider,
+        Event,
         GeographicProjection,
         IntersectionTests,
         loadImage,
@@ -54,7 +59,8 @@ define([
         GlobeSurfaceTileProvider,
         ImageryLayerCollection,
         QuadtreePrimitive,
-        SceneMode) {
+        SceneMode,
+        ShadowMode) {
     'use strict';
 
     /**
@@ -95,11 +101,8 @@ define([
             })
         });
 
-        /**
-         * The terrain provider providing surface geometry for this globe.
-         * @type {TerrainProvider}
-         */
-        this.terrainProvider = terrainProvider;
+        this._terrainProvider = terrainProvider;
+        this._terrainProviderChanged = new Event();
 
         /**
          * Determines if the globe will be shown.
@@ -188,6 +191,16 @@ define([
          */
         this.depthTestAgainstTerrain = false;
 
+        /**
+         * Determines whether the globe casts or receives shadows from each light source. Setting the globe
+         * to cast shadows may impact performance since the terrain is rendered again from the light's perspective.
+         * Currently only terrain that is in view casts shadows. By default the globe does not cast shadows.
+         *
+         * @type {ShadowMode}
+         * @default ShadowMode.RECEIVE_ONLY
+         */
+        this.shadows = ShadowMode.RECEIVE_ONLY;
+
         this._oceanNormalMap = undefined;
         this._zoomedOutOceanSpecularIntensity = 0.5;
     }
@@ -227,6 +240,37 @@ define([
             }
         },
         /**
+         * The terrain provider providing surface geometry for this globe.
+         * @type {TerrainProvider}
+         *
+         * @memberof Globe.prototype
+         * @type {TerrainProvider}
+         *
+         */
+        terrainProvider : {
+            get : function() {
+                return this._terrainProvider;
+            },
+            set : function(value) {
+                if (value !== this._terrainProvider) {
+                    this._terrainProvider = value;
+                    this._terrainProviderChanged.raiseEvent(value);
+                }
+            }
+        },
+        /**
+         * Gets an event that's raised when the terrain provider is changed
+         *
+         * @memberof Globe.prototype
+         * @type {Event}
+         * @readonly
+         */
+        terrainProviderChanged : {
+            get: function() {
+                return this._terrainProviderChanged;
+            }
+        },
+        /**
          * Gets an event that's raised when the length of the tile load queue has changed since the last render frame.  When the load queue is empty,
          * all terrain and imagery for the current view have been loaded.  The event passes the new length of the tile load queue.
          *
@@ -236,6 +280,46 @@ define([
         tileLoadProgressEvent : {
             get: function() {
                 return this._surface.tileLoadProgressEvent;
+            }
+        },
+
+        /**
+         * Determines whether the globe casts shadows from each light source.
+         *
+         * @memberof Globe.prototype
+         * @type {Boolean}
+         * @deprecated
+         */
+        castShadows : {
+            get : function() {
+                deprecationWarning('Globe.castShadows', 'Globe.castShadows was deprecated in Cesium 1.25. It will be removed in 1.26. Use Globe.shadows instead.');
+                return ShadowMode.castShadows(this.shadows);
+            },
+            set : function(value) {
+                deprecationWarning('Globe.castShadows', 'Globe.castShadows was deprecated in Cesium 1.25. It will be removed in 1.26. Use Globe.shadows instead.');
+                var castShadows = value;
+                var receiveShadows = ShadowMode.receiveShadows(this.shadows);
+                this.shadows = ShadowMode.fromCastReceive(castShadows, receiveShadows);
+            }
+        },
+
+        /**
+         * Determines whether the globe receives shadows from shadow casters in the scene.
+         *
+         * @memberof Globe.prototype
+         * @type {Boolean}
+         * @deprecated
+         */
+        receiveShadows : {
+            get : function() {
+                deprecationWarning('Globe.receiveShadows', 'Globe.receiveShadows was deprecated in Cesium 1.25. It will be removed in 1.26. Use Globe.shadows instead.');
+                return ShadowMode.receiveShadows(this.shadows);
+            },
+            set : function(value) {
+                deprecationWarning('Globe.receiveShadows', 'Globe.receiveShadows was deprecated in Cesium 1.25. It will be removed in 1.26. Use Globe.shadows instead.');
+                var castShadows = ShadowMode.castShadows(this.shadows);
+                var receiveShadows = value;
+                this.shadows = ShadowMode.fromCastReceive(castShadows, receiveShadows);
             }
         }
     });
@@ -456,6 +540,7 @@ define([
             tileProvider.hasWaterMask = hasWaterMask;
             tileProvider.oceanNormalMap = this._oceanNormalMap;
             tileProvider.enableLighting = this.enableLighting;
+            tileProvider.shadows = this.shadows;
 
             surface.beginFrame(frameState);
         }
