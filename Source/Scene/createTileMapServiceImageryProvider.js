@@ -223,7 +223,9 @@ define([
                 minimumLevel = 0;
             }
 
-            var templateUrl = joinUrls(url, '{z}/{x}/{reverseY}.' + fileExtension);
+            if (!options.tilesUrlTemplate)
+                options.tilesUrlTemplate = '{z}/{x}/{reverseY}.' + fileExtension;
+            var templateUrl = joinUrls(url, options.tilesUrlTemplate);
 
             deferred.resolve({
                 url : templateUrl,
@@ -249,7 +251,7 @@ define([
             var tilingScheme = defined(options.tilingScheme) ? options.tilingScheme : new WebMercatorTilingScheme({ ellipsoid : options.ellipsoid });
             var rectangle = defaultValue(options.rectangle, tilingScheme.rectangle);
 
-            var templateUrl = joinUrls(url, '{z}/{x}/{reverseY}.' + fileExtension);
+            var templateUrl = joinUrls(url, options.tilesUrlTemplate);
 
             deferred.resolve({
                 url : templateUrl,
