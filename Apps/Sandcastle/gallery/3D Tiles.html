@@ -49,9 +49,17 @@ var tilesets = [{
 }, {
     name : 'Instanced', url : '../../../Specs/Data/Cesium3DTiles/Instanced/InstancedWithBatchTable/'
 }, {
+    name : 'Instanced/Orientation', url : '../../../Specs/Data/Cesium3DTiles/Instanced/InstancedOrientationWithBatchTable/'
+}, {
     name : 'Composite', url : '../../../Specs/Data/Cesium3DTiles/Composite/Composite/'
 }, {
-    name : 'Points', url : '../../../Specs/Data/Cesium3DTiles/Points/PointsRGB/'
+    name : 'PointCloud', url : '../../../Specs/Data/Cesium3DTiles/PointCloud/PointCloudRGB/'
+}, {
+    name : 'PointCloudConstantColor', url : '../../../Specs/Data/Cesium3DTiles/PointCloud/PointCloudConstantColor/'
+}, {
+    name : 'PointCloudNormals', url : '../../../Specs/Data/Cesium3DTiles/PointCloud/PointCloudQuantizedOctEncoded/'
+}, {
+    name : 'PointCloudBatched', url : '../../../Specs/Data/Cesium3DTiles/PointCloud/PointCloudBatched/'
 }];
 
 var tileset;
@@ -61,8 +69,9 @@ function loadTileset(url) {
 
     tileset = scene.primitives.add(new Cesium.Cesium3DTileset({
         url : url,
-        debugShowStatistics : true,
-        maximumNumberOfLoadedTiles : 3
+        debugShowStatistics : true
+//        , maximumNumberOfLoadedTiles : 3
+//       , refineToVisible : true
     }));
 
     return tileset.readyPromise.then(function(tileset) {
