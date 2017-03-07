@@ -7,8 +7,8 @@ define([
         '../../Core/defineProperties',
         '../../Core/destroyObject',
         '../../Core/DeveloperError',
+        '../../Core/Event',
         '../../Core/EventHelper',
-        '../../Core/Fullscreen',
         '../../Core/isArray',
         '../../Core/Matrix4',
         '../../Core/Rectangle',
@@ -22,7 +22,6 @@ define([
         '../../DataSources/Property',
         '../../Scene/ImageryLayer',
         '../../Scene/SceneMode',
-        '../../Scene/ShadowMode',
         '../../ThirdParty/knockout',
         '../../ThirdParty/when',
         '../Animation/Animation',
@@ -51,8 +50,8 @@ define([
         defineProperties,
         destroyObject,
         DeveloperError,
+        Event,
         EventHelper,
-        Fullscreen,
         isArray,
         Matrix4,
         Rectangle,
@@ -66,7 +65,6 @@ define([
         Property,
         ImageryLayer,
         SceneMode,
-        ShadowMode,
         knockout,
         when,
         Animation,
@@ -473,6 +471,7 @@ Either specify options.terrainProvider instead or set options.baseLayerPicker to
             toolbar.appendChild(geocoderContainer);
             geocoder = new Geocoder({
                 container : geocoderContainer,
+                geocoderServices: defined(options.geocoder) ? (isArray(options.geocoder) ? options.geocoder : [options.geocoder]) : undefined,
                 scene : cesiumWidget.scene
             });
             // Subscribe to search so that we can clear the trackedEntity when it is clicked.
@@ -499,9 +498,11 @@ Either specify options.terrainProvider instead or set options.baseLayerPicker to
         // SceneModePicker
         // By default, we silently disable the scene mode picker if scene3DOnly is true,
         // but if sceneModePicker is explicitly set to true, throw an error.
+        //>>includeStart('debug', pragmas.debug);
         if ((options.sceneModePicker === true) && scene3DOnly) {
             throw new DeveloperError('options.sceneModePicker is not available when options.scene3DOnly is set to true.');
         }
+        //>>includeEnd('debug');
 
         var sceneModePicker;
         if (!scene3DOnly && (!defined(options.sceneModePicker) || options.sceneModePicker !== false)) {
@@ -662,6 +663,8 @@ Either specify options.terrainProvider instead or set options.baseLayerPicker to
         this._zoomTarget = undefined;
         this._zoomPromise = undefined;
         this._zoomOptions = undefined;
+        this._selectedEntityChanged = new Event();
+        this._trackedEntityChanged = new Event();
 
         knockout.track(this, ['_trackedEntity', '_selectedEntity', '_clockTrackedDataSource']);
 
@@ -974,14 +977,7 @@ Either specify options.terrainProvider instead or set options.baseLayerPicker to
                 return this.scene.globe.shadows;
             },
             set : function(value) {
-                // If the passed in value is a boolean, convert to the ShadowMode enum.
-                if (value === true) {
-                    this.scene.globe.shadows = ShadowMode.ENABLED;
-                } else if (value === false) {
-                    this.scene.globe.shadows = ShadowMode.RECEIVE_ONLY;
-                } else {
-                    this.scene.globe.shadows = value;
-                }
+                this.scene.globe.shadows = value;
             }
         },
 
@@ -1176,12 +1172,13 @@ Either specify options.terrainProvider instead or set options.baseLayerPicker to
 
                         this._entityView = undefined;
                         this.camera.lookAtTransform(Matrix4.IDENTITY);
-                        return;
+                    } else {
+                        //We can't start tracking immediately, so we set a flag and start tracking
+                        //when the bounding sphere is ready (most likely next frame).
+                        this._needTrackedEntityUpdate = true;
                     }
 
-                    //We can't start tracking immediately, so we set a flag and start tracking
-                    //when the bounding sphere is ready (most likely next frame).
-                    this._needTrackedEntityUpdate = true;
+                    this._trackedEntityChanged.raiseEvent(value);
                 }
             }
         },
@@ -1201,7 +1198,30 @@ Either specify options.terrainProvider instead or set options.baseLayerPicker to
             }
         },
         /**
+         * Gets the event that is raised when the selected entity chages
+         * @memberof Viewer.prototype
+         * @type {Event}
+         * @readonly
+         */
+        selectedEntityChanged : {
+            get : function() {
+                return this._selectedEntityChanged;
+            }
+        },
+        /**
+         * Gets the event that is raised when the tracked entity chages
+         * @memberof Viewer.prototype
+         * @type {Event}
+         * @readonly
+         */
+        trackedEntityChanged : {
+            get : function() {
+                return this._trackedEntityChanged;
+            }
+        },
+        /**
          * Gets or sets the data source to track with the viewer's clock.
+         * @memberof Viewer.prototype
          * @type {DataSource}
          */
         clockTrackedDataSource : {
@@ -1261,6 +1281,11 @@ Either specify options.terrainProvider instead or set options.baseLayerPicker to
 
         if (defined(baseLayerPickerDropDown)) {
             baseLayerPickerDropDown.style.maxHeight = panelMaxHeight + 'px';
+        }
+
+        if (defined(this._geocoder)) {
+            var geocoderSuggestions = this._geocoder.searchSuggestionsContainer;
+            geocoderSuggestions.style.maxHeight = panelMaxHeight + 'px';
         }
 
         if (defined(this._infoBox)) {

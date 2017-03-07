@@ -4,8 +4,10 @@ define([
         '../Core/defaultValue',
         '../Core/defined',
         '../Core/defineProperties',
+        '../Core/deprecationWarning',
         '../Core/destroyObject',
         '../Core/DeveloperError',
+        '../Core/getBaseUri',
         '../Core/getMagic',
         '../Core/getStringFromTypedArray',
         '../Core/loadArrayBuffer',
@@ -13,17 +15,20 @@ define([
         '../Core/RequestScheduler',
         '../Core/RequestType',
         '../ThirdParty/when',
-        './Cesium3DTileFeature',
         './Cesium3DTileBatchTable',
         './Cesium3DTileContentState',
+        './Cesium3DTileFeature',
+        './getAttributeOrUniformBySemantic',
         './Model'
     ], function(
         Color,
         defaultValue,
         defined,
         defineProperties,
+        deprecationWarning,
         destroyObject,
         DeveloperError,
+        getBaseUri,
         getMagic,
         getStringFromTypedArray,
         loadArrayBuffer,
@@ -31,9 +36,10 @@ define([
         RequestScheduler,
         RequestType,
         when,
-        Cesium3DTileFeature,
         Cesium3DTileBatchTable,
         Cesium3DTileContentState,
+        Cesium3DTileFeature,
+        getAttributeOrUniformBySemantic,
         Model) {
     'use strict';
 
@@ -66,6 +72,9 @@ define([
         this._features = undefined;
     }
 
+    // This can be overridden for testing purposes
+    Batched3DModel3DTileContent._deprecationWarning = deprecationWarning;
+
     defineProperties(Batched3DModel3DTileContent.prototype, {
         /**
          * Part of the {@link Cesium3DTileContent} interface.
@@ -73,6 +82,15 @@ define([
         featuresLength : {
             get : function() {
                 return this._featuresLength;
+            }
+        },
+
+        /**
+         * Part of the {@link Cesium3DTileContent} interface.
+         */
+        pointsLength : {
+            get : function() {
+                return 0;
             }
         },
 
@@ -116,11 +134,11 @@ define([
         }
     }
 
-     /**
+    /**
      * Part of the {@link Cesium3DTileContent} interface.
      */
-    Batched3DModel3DTileContent.prototype.hasProperty = function(name) {
-        return this.batchTable.hasProperty(name);
+    Batched3DModel3DTileContent.prototype.hasProperty = function(batchId, name) {
+        return this.batchTable.hasProperty(batchId, name);
     };
 
     /**
@@ -172,6 +190,48 @@ define([
         return true;
     };
 
+    function getBatchIdAttributeName(gltf) {
+        var batchIdAttributeName = getAttributeOrUniformBySemantic(gltf, '_BATCHID');
+        if (!defined(batchIdAttributeName)) {
+            batchIdAttributeName = getAttributeOrUniformBySemantic(gltf, 'BATCHID');
+            if (defined(batchIdAttributeName)) {
+                Batched3DModel3DTileContent._deprecationWarning('b3dm-legacy-batchid', 'The glTF in this b3dm uses the semantic `BATCHID`. Application-specific semantics should be prefixed with an underscore: `_BATCHID`.');
+            }
+        }
+        return batchIdAttributeName;
+    }
+
+    function getVertexShaderCallback(content) {
+        return function(vs) {
+            var batchTable = content.batchTable;
+            var gltf = content._model.gltf;
+            var batchIdAttributeName = getBatchIdAttributeName(gltf);
+            var callback = batchTable.getVertexShaderCallback(true, batchIdAttributeName);
+            return defined(callback) ? callback(vs) : vs;
+        };
+    }
+
+    function getPickVertexShaderCallback(content) {
+        return function(vs) {
+            var batchTable = content.batchTable;
+            var gltf = content._model.gltf;
+            var batchIdAttributeName = getBatchIdAttributeName(gltf);
+            var callback = batchTable.getPickVertexShaderCallback(batchIdAttributeName);
+            return defined(callback) ? callback(vs) : vs;
+        };
+    }
+
+    function getFragmentShaderCallback(content) {
+        return function(fs) {
+            var batchTable = content.batchTable;
+            var gltf = content._model.gltf;
+            var diffuseUniformName = getAttributeOrUniformBySemantic(gltf, '_3DTILESDIFFUSE');
+            var colorBlendMode = content._tileset.colorBlendMode;
+            var callback = batchTable.getFragmentShaderCallback(true, colorBlendMode, diffuseUniformName);
+            return defined(callback) ? callback(fs) : fs;
+        };
+    }
+
     /**
      * Part of the {@link Cesium3DTileContent} interface.
      */
@@ -218,7 +278,7 @@ define([
             batchLength = batchTableJsonByteLength;
             batchTableJsonByteLength = batchTableBinaryByteLength;
             batchTableBinaryByteLength = 0;
-            console.log('Warning: b3dm header is using the legacy format [batchLength] [batchTableByteLength]. The new format is [batchTableJsonByteLength] [batchTableBinaryByteLength] [batchLength] from https://github.com/AnalyticalGraphicsInc/3d-tiles/blob/master/TileFormats/Batched3DModel/README.md.');
+            deprecationWarning('b3dm-legacy-header', 'This b3dm header is using the legacy format [batchLength] [batchTableByteLength]. The new format is [batchTableJsonByteLength] [batchTableBinaryByteLength] [batchLength] from https://github.com/AnalyticalGraphicsInc/3d-tiles/blob/master/TileFormats/Batched3DModel/README.md.');
         }
 
         this._featuresLength = batchLength;
@@ -256,14 +316,19 @@ define([
             gltf : gltfView,
             cull : false,           // The model is already culled by the 3D tiles
             releaseGltfJson : true, // Models are unique and will not benefit from caching so save memory
-            basePath : this._url,
+            basePath : getBaseUri(this._url),
             modelMatrix : this._tile.computedTransform,
-            vertexShaderLoaded : batchTable.getVertexShaderCallback(),
-            fragmentShaderLoaded : batchTable.getFragmentShaderCallback(),
+            shadows: this._tileset.shadows,
+            debugWireframe: this._tileset.debugWireframe,
+            incrementallyLoadTextures : false,
+            pickPrimitive : this._tileset,
+            vertexShaderLoaded : getVertexShaderCallback(this),
+            fragmentShaderLoaded : getFragmentShaderCallback(this),
             uniformMapLoaded : batchTable.getUniformMapCallback(),
-            pickVertexShaderLoaded : batchTable.getPickVertexShaderCallback(),
+            pickVertexShaderLoaded : getPickVertexShaderCallback(this),
             pickFragmentShaderLoaded : batchTable.getPickFragmentShaderCallback(),
-            pickUniformMapLoaded : batchTable.getPickUniformMapCallback()
+            pickUniformMapLoaded : batchTable.getPickUniformMapCallback(),
+            addBatchIdToGeneratedShaders : (batchLength > 0) // If the batch table has values in it, generated shaders will need a batchId attribute
         });
 
         this._model = model;
@@ -292,6 +357,13 @@ define([
     /**
      * Part of the {@link Cesium3DTileContent} interface.
      */
+    Batched3DModel3DTileContent.prototype.applyStyleWithShader = function(frameState, style) {
+        return false;
+    };
+
+    /**
+     * Part of the {@link Cesium3DTileContent} interface.
+     */
     Batched3DModel3DTileContent.prototype.update = function(tileset, frameState) {
         var oldAddCommand = frameState.addCommand;
         if (frameState.passes.render) {
@@ -303,6 +375,8 @@ define([
         // actually generate commands.
         this.batchTable.update(tileset, frameState);
         this._model.modelMatrix = this._tile.computedTransform;
+        this._model.shadows = this._tileset.shadows;
+        this._model.debugWireframe = this._tileset.debugWireframe;
         this._model.update(frameState);
 
         frameState.addCommand = oldAddCommand;
@@ -321,7 +395,6 @@ define([
     Batched3DModel3DTileContent.prototype.destroy = function() {
         this._model = this._model && this._model.destroy();
         this.batchTable = this.batchTable && this.batchTable.destroy();
-
         return destroyObject(this);
     };
 

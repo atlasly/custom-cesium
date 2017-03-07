@@ -14,6 +14,7 @@ define([
         '../Core/EllipsoidGeodesic',
         '../Core/Event',
         '../Core/HeadingPitchRange',
+        '../Core/HeadingPitchRoll',
         '../Core/Intersect',
         '../Core/IntersectionTests',
         '../Core/Math',
@@ -42,6 +43,7 @@ define([
         EllipsoidGeodesic,
         Event,
         HeadingPitchRange,
+        HeadingPitchRoll,
         Intersect,
         IntersectionTests,
         CesiumMath,
@@ -927,7 +929,7 @@ define([
         }
 
         var globe = this._scene.globe;
-        var globeFinishedUpdating = !defined(globe) || (globe._surface.tileProvider.ready && !defined(globe._surface._tileLoadQueue.head) && globe._surface._debug.tilesWaitingForChildren === 0);
+        var globeFinishedUpdating = !defined(globe) || (globe._surface.tileProvider.ready && globe._surface._tileLoadQueueHigh.length === 0 && globe._surface._tileLoadQueueMedium.length === 0 && globe._surface._tileLoadQueueLow.length === 0 && globe._surface._debug.tilesWaitingForChildren === 0);
         if (this._suspendTerrainAdjustment) {
             this._suspendTerrainAdjustment = !globeFinishedUpdating;
         }
@@ -963,14 +965,15 @@ define([
     var scratchSetViewMatrix3 = new Matrix3();
     var scratchSetViewCartographic = new Cartographic();
 
-    function setView3D(camera, position, heading, pitch, roll) {
+    function setView3D(camera, position, hpr) {
         var currentTransform = Matrix4.clone(camera.transform, scratchSetViewTransform1);
         var localTransform = Transforms.eastNorthUpToFixedFrame(position, camera._projection.ellipsoid, scratchSetViewTransform2);
         camera._setTransform(localTransform);
 
         Cartesian3.clone(Cartesian3.ZERO, camera.position);
+        hpr.heading = hpr.heading - CesiumMath.PI_OVER_TWO;
 
-        var rotQuat = Quaternion.fromHeadingPitchRoll(heading - CesiumMath.PI_OVER_TWO, pitch, roll, scratchSetViewQuaternion);
+        var rotQuat = Quaternion.fromHeadingPitchRoll(hpr, scratchSetViewQuaternion);
         var rotMat = Matrix3.fromQuaternion(rotQuat, scratchSetViewMatrix3);
 
         Matrix3.getColumn(rotMat, 0, camera.direction);
@@ -980,7 +983,7 @@ define([
         camera._setTransform(currentTransform);
     }
 
-    function setViewCV(camera, position, heading, pitch, roll, convert) {
+    function setViewCV(camera, position,hpr, convert) {
         var currentTransform = Matrix4.clone(camera.transform, scratchSetViewTransform1);
         camera._setTransform(Matrix4.IDENTITY);
 
@@ -992,8 +995,9 @@ define([
             }
             Cartesian3.clone(position, camera.position);
         }
+        hpr.heading = hpr.heading - CesiumMath.PI_OVER_TWO;
 
-        var rotQuat = Quaternion.fromHeadingPitchRoll(heading - CesiumMath.PI_OVER_TWO, pitch, roll, scratchSetViewQuaternion);
+        var rotQuat = Quaternion.fromHeadingPitchRoll(hpr, scratchSetViewQuaternion);
         var rotMat = Matrix3.fromQuaternion(rotQuat, scratchSetViewMatrix3);
 
         Matrix3.getColumn(rotMat, 0, camera.direction);
@@ -1003,10 +1007,7 @@ define([
         camera._setTransform(currentTransform);
     }
 
-    function setView2D(camera, position, heading, convert) {
-        var pitch = -CesiumMath.PI_OVER_TWO;
-        var roll = 0.0;
-
+    function setView2D(camera, position, hpr, convert) {
         var currentTransform = Matrix4.clone(camera.transform, scratchSetViewTransform1);
         camera._setTransform(Matrix4.IDENTITY);
 
@@ -1033,7 +1034,10 @@ define([
         }
 
         if (camera._scene.mapMode2D === MapMode2D.ROTATE) {
-            var rotQuat = Quaternion.fromHeadingPitchRoll(heading - CesiumMath.PI_OVER_TWO, pitch, roll, scratchSetViewQuaternion);
+            hpr.heading = hpr.heading  - CesiumMath.PI_OVER_TWO;
+            hpr.pitch = -CesiumMath.PI_OVER_TWO;
+            hpr.roll =  0.0;
+            var rotQuat = Quaternion.fromHeadingPitchRoll(hpr, scratchSetViewQuaternion);
             var rotMat = Matrix3.fromQuaternion(rotQuat, scratchSetViewMatrix3);
 
             Matrix3.getColumn(rotMat, 2, camera.up);
@@ -1082,12 +1086,13 @@ define([
         endTransform : undefined
     };
 
+    var scratchHpr = new HeadingPitchRoll();
     /**
      * Sets the camera position, orientation and transform.
      *
      * @param {Object} options Object with the following properties:
      * @param {Cartesian3|Rectangle} [options.destination] The final position of the camera in WGS84 (world) coordinates or a rectangle that would be visible from a top-down view.
-     * @param {Object} [options.orientation] An object that contains either direction and up properties or heading, pith and roll properties. By default, the direction will point
+     * @param {Object} [options.orientation] An object that contains either direction and up properties or heading, pitch and roll properties. By default, the direction will point
      * towards the center of the frame in 3D and in the negative z direction in Columbus view. The up direction will point towards local north in 3D and in the positive
      * y direction in Columbus view. Orientation is not used in 2D when in infinite scrolling mode.
      * @param {Matrix4} [options.endTransform] Transform matrix representing the reference frame of the camera.
@@ -1156,18 +1161,18 @@ define([
             orientation = directionUpToHeadingPitchRoll(this, destination, orientation, scratchSetViewOptions.orientation);
         }
 
-        var heading = defaultValue(orientation.heading, 0.0);
-        var pitch = defaultValue(orientation.pitch, -CesiumMath.PI_OVER_TWO);
-        var roll = defaultValue(orientation.roll, 0.0);
+        scratchHpr.heading = defaultValue(orientation.heading, 0.0);
+        scratchHpr.pitch = defaultValue(orientation.pitch, -CesiumMath.PI_OVER_TWO);
+        scratchHpr.roll = defaultValue(orientation.roll, 0.0);
 
         this._suspendTerrainAdjustment = true;
 
         if (mode === SceneMode.SCENE3D) {
-            setView3D(this, destination, heading, pitch, roll);
+            setView3D(this, destination, scratchHpr);
         } else if (mode === SceneMode.SCENE2D) {
-            setView2D(this, destination, heading, convert);
+            setView2D(this, destination, scratchHpr, convert);
         } else {
-            setViewCV(this, destination, heading, pitch, roll, convert);
+            setViewCV(this, destination, scratchHpr, convert);
         }
     };
 
@@ -2729,11 +2734,11 @@ define([
         if (!defined(boundingSphere)) {
             throw new DeveloperError('boundingSphere is required.');
         }
-        //>>includeEnd('debug');
 
         if (this._mode === SceneMode.MORPHING) {
             throw new DeveloperError('viewBoundingSphere is not supported while morphing.');
         }
+        //>>includeEnd('debug');
 
         offset = adjustBoundingSphereOffset(this, boundingSphere, offset);
         this.lookAt(boundingSphere.center, offset);
@@ -2846,8 +2851,15 @@ define([
         var qUnit = Cartesian3.normalize(q, scratchCartesian3_2);
 
         // Determine the east and north directions at q.
-        var eUnit = Cartesian3.normalize(Cartesian3.cross(Cartesian3.UNIT_Z, q, scratchCartesian3_3), scratchCartesian3_3);
-        var nUnit = Cartesian3.normalize(Cartesian3.cross(qUnit, eUnit, scratchCartesian3_4), scratchCartesian3_4);
+        var eUnit;
+        var nUnit;
+        if (Cartesian3.equalsEpsilon(qUnit, Cartesian3.UNIT_Z, CesiumMath.EPSILON10)) {
+            eUnit = new Cartesian3(0, 1, 0);
+            nUnit = new Cartesian3(0, 0, 1);
+        } else {
+            eUnit = Cartesian3.normalize(Cartesian3.cross(Cartesian3.UNIT_Z, qUnit, scratchCartesian3_3), scratchCartesian3_3);
+            nUnit = Cartesian3.normalize(Cartesian3.cross(qUnit, eUnit, scratchCartesian3_4), scratchCartesian3_4);
+        }
 
         // Determine the radius of the 'limb' of the ellipsoid.
         var wMagnitude = Math.sqrt(Cartesian3.magnitudeSquared(q) - 1.0);

@@ -6,6 +6,7 @@ defineSuite([
         'Core/defaultValue',
         'Core/defined',
         'Core/HeadingPitchRange',
+        'Core/HeadingPitchRoll',
         'Core/JulianDate',
         'Core/Math',
         'Core/Matrix4',
@@ -14,6 +15,7 @@ defineSuite([
         'Scene/Model',
         'Scene/ModelAnimationLoop',
         'Scene/SceneMode',
+        'Scene/ShadowMode',
         'Specs/createScene',
         'Specs/pollToPromise',
         'ThirdParty/when'
@@ -24,6 +26,7 @@ defineSuite([
         defaultValue,
         defined,
         HeadingPitchRange,
+        HeadingPitchRoll,
         JulianDate,
         CesiumMath,
         Matrix4,
@@ -32,6 +35,7 @@ defineSuite([
         Model,
         ModelAnimationLoop,
         SceneMode,
+        ShadowMode,
         createScene,
         pollToPromise,
         when) {
@@ -74,6 +78,10 @@ defineSuite([
         }));
 
         return when.all(modelPromises);
+    });
+
+    beforeEach(function() {
+        scene.morphTo3D(0.0);
     });
 
     afterAll(function() {
@@ -125,7 +133,8 @@ defineSuite([
             var heading = Math.PI/2.0;
             var pitch = 0.0;
             var roll = 0.0;
-            var modelMatrix = Transforms.headingPitchRollToFixedFrame(position, heading, pitch, roll);
+            var hpr = new HeadingPitchRoll(heading, pitch, roll);
+            var modelMatrix = Transforms.headingPitchRollToFixedFrame(position, hpr);
             instances.push({
                 modelMatrix : modelMatrix
             });
@@ -134,7 +143,7 @@ defineSuite([
         return instances;
     }
 
-    function getBoundingVolume(instances, modelRadius) {
+    function getBoundingSphere(instances, modelRadius) {
         var length = instances.length;
         var points = new Array(length);
         for (var i = 0; i < length; ++i) {
@@ -160,7 +169,7 @@ defineSuite([
         expectColor = defaultValue(expectColor, true);
 
         collection.show = false;
-        expect(scene.renderForSpecs(time)).toEqual([0, 0, 0, 255]);
+        expect(scene).toRender([0, 0, 0, 255]);
         collection.show = true;
 
         // Verify each instance
@@ -168,10 +177,38 @@ defineSuite([
         for (var i = 0; i < length; ++i) {
             zoomTo(collection, i);
             if (expectColor) {
-                expect(scene.renderForSpecs(time)).not.toEqual([0, 0, 0, 255]);
+                expect({
+                    scene : scene,
+                    time : time
+                }).notToRender([0, 0, 0, 255]);
             } else {
-                expect(scene.renderForSpecs(time)).toEqual([0, 0, 0, 255]);
+                expect({
+                    scene : scene,
+                    time : time
+                }).toRender([0, 0, 0, 255]);
             }
+        }
+    }
+
+    function verifyPickedInstance(collection, instanceId) {
+        return function(result) {
+            expect(result.primitive).toBe(collection);
+            expect(result.modelMatrix).toBeDefined();
+            expect(result.instanceId).toBe(instanceId);
+            expect(result.model).toBe(collection._model);
+        };
+    }
+
+    function expectPick(collection) {
+        collection.show = false;
+        expect(scene).notToPick();
+        collection.show = true;
+
+        // Verify each instance
+        var length = collection.length;
+        for (var i = 0; i < length; ++i) {
+            zoomTo(collection, i);
+            expect(scene).toPickAndCall(verifyPickedInstance(collection, i));
         }
     }
 
@@ -205,7 +242,10 @@ defineSuite([
             expect(collection._cull).toEqual(true);
             expect(collection._model).toBeDefined();
             expect(collection._model.ready).toEqual(true);
-            expect(collection._model.cacheKey).toEqual(boxUrl + '#instanced');
+
+            if (collection._instancingSupported) {
+                expect(collection._model.cacheKey).toEqual(boxUrl + '#instanced');
+            }
         });
     });
 
@@ -337,9 +377,9 @@ defineSuite([
             gltf : boxGltf,
             instances : instances
         }).then(function(collection) {
-            var boundingVolume = getBoundingVolume(instances, boxRadius);
-            expect(collection._boundingVolume.center).toEqual(boundingVolume.center);
-            expect(collection._boundingVolume.radius).toEqual(boundingVolume.radius);
+            var boundingSphere = getBoundingSphere(instances, boxRadius);
+            expect(collection._boundingSphere.center).toEqual(boundingSphere.center);
+            expect(collection._boundingSphere.radius).toEqual(boundingSphere.radius);
         });
     });
 
@@ -409,18 +449,6 @@ defineSuite([
         });
     });
 
-    it('only renders when mode is SCENE3D', function() {
-        return loadCollection({
-            gltf : boxGltf,
-            instances : createInstances(4)
-        }).then(function(collection) {
-            expectRender(collection);
-            scene.mode = SceneMode.SCENE2D;
-            expectRender(collection, false);
-            scene.mode = SceneMode.SCENE3D;
-        });
-    });
-
     it('renders two model instance collections that use the same cache key', function() {
         var collections = [];
         var promises = [];
@@ -464,10 +492,12 @@ defineSuite([
                 }
             }
 
-            // Check that vertex arrays are different, since each collection has a unique vertex buffer for instanced attributes.
-            for (name in resourcesFirst.vertexArrays) {
-                if (resourcesFirst.vertexArrays.hasOwnProperty(name)) {
-                    expect(resourcesFirst.vertexArrays[name]).not.toEqual(resourcesSecond.vertexArrays[name]);
+            if (collections[0]._instancingSupported) {
+                // Check that vertex arrays are different, since each collection has a unique vertex buffer for instanced attributes.
+                for (name in resourcesFirst.vertexArrays) {
+                    if (resourcesFirst.vertexArrays.hasOwnProperty(name)) {
+                        expect(resourcesFirst.vertexArrays[name]).not.toEqual(resourcesSecond.vertexArrays[name]);
+                    }
                 }
             }
         });
@@ -498,6 +528,145 @@ defineSuite([
             scene.camera.lookAt(new Cartesian3(100000.0, 0.0, 0.0), new HeadingPitchRange(0.0, 0.0, 10.0));
             scene.renderForSpecs();
             expect(scene._frustumCommandsList.length).not.toEqual(0);
+        });
+    });
+
+    it('shadows', function() {
+        return loadCollection({
+            gltf : boxGltf,
+            instances : createInstances(4)
+        }).then(function(collection) {
+            scene.renderForSpecs();
+            expect(collection._shadows).toBe(ShadowMode.ENABLED);
+            var drawCommand = collection._drawCommands[0];
+            expect(drawCommand.castShadows).toBe(true);
+            expect(drawCommand.receiveShadows).toBe(true);
+            collection.shadows = ShadowMode.DISABLED;
+            scene.renderForSpecs();
+            expect(drawCommand.castShadows).toBe(false);
+            expect(drawCommand.receiveShadows).toBe(false);
+        });
+    });
+
+    it('picks', function() {
+        return loadCollection({
+            gltf : boxGltf,
+            instances : createInstances(4)
+        }).then(function(collection) {
+            expectPick(collection);
+        });
+    });
+
+    it('picks when instancing is disabled', function() {
+        // Disable extension
+        var instancedArrays = scene.context._instancedArrays;
+        scene.context._instancedArrays = undefined;
+
+        return loadCollection({
+            gltf : boxGltf,
+            instances : createInstances(4)
+        }).then(function(collection) {
+            expectPick(collection);
+            // Re-enable extension
+            scene.context._instancedArrays = instancedArrays;
+        });
+    });
+
+    it('moves instance', function() {
+        return loadCollection({
+            gltf : boxGltf,
+            instances : createInstances(4)
+        }).then(function(collection) {
+            zoomTo(collection, 1);
+            expect(scene).toPickAndCall(function(result) {
+                var originalMatrix = result.modelMatrix;
+                result.modelMatrix = Matrix4.IDENTITY;
+                expect(scene).notToPick();
+                result.modelMatrix = originalMatrix;
+                expect(scene).toPickPrimitive(collection);
+            });
+        });
+    });
+
+    it('moves instance when instancing is disabled', function() {
+        // Disable extension
+        var instancedArrays = scene.context._instancedArrays;
+        scene.context._instancedArrays = undefined;
+
+        return loadCollection({
+            gltf : boxGltf,
+            instances : createInstances(4)
+        }).then(function(collection) {
+            zoomTo(collection, 1);
+            expect(scene).toPickAndCall(function(result) {
+                var originalMatrix = result.modelMatrix;
+                var originalRadius = collection._boundingSphere.radius;
+                result.modelMatrix = Matrix4.IDENTITY;
+                expect(scene).notToPick();
+                expect(collection._boundingSphere.radius).toBeGreaterThan(originalRadius);
+                result.modelMatrix = originalMatrix;
+                expect(scene).toPickPrimitive(collection);
+            });
+            // Re-enable extension
+            scene.context._instancedArrays = instancedArrays;
+        });
+    });
+
+    it('renders in 2D', function() {
+        return loadCollection({
+            gltf : boxGltf,
+            instances : createInstances(4)
+        }).then(function(collection) {
+            expectRender(collection);
+            scene.morphTo2D(0.0);
+            expectRender(collection);
+        });
+    });
+
+    it('renders in 2D when instancing is disabled', function() {
+        // Disable extension
+        var instancedArrays = scene.context._instancedArrays;
+        scene.context._instancedArrays = undefined;
+
+        return loadCollection({
+            gltf : boxGltf,
+            instances : createInstances(4)
+        }).then(function(collection) {
+            expectRender(collection);
+            scene.morphTo2D(0.0);
+            expectRender(collection);
+
+            // Re-enable extension
+            scene.context._instancedArrays = instancedArrays;
+        });
+    });
+
+    it('renders in CV', function() {
+        return loadCollection({
+            gltf : boxGltf,
+            instances : createInstances(4)
+        }).then(function(collection) {
+            expectRender(collection);
+            scene.morphToColumbusView(0.0);
+            expectRender(collection);
+        });
+    });
+
+    it('renders in CV when instancing is disabled', function() {
+        // Disable extension
+        var instancedArrays = scene.context._instancedArrays;
+        scene.context._instancedArrays = undefined;
+
+        return loadCollection({
+            gltf : boxGltf,
+            instances : createInstances(4)
+        }).then(function(collection) {
+            expectRender(collection);
+            scene.morphToColumbusView(0.0);
+            expectRender(collection);
+
+            // Re-enable extension
+            scene.context._instancedArrays = instancedArrays;
         });
     });
 

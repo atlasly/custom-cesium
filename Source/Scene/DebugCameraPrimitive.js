@@ -10,7 +10,6 @@ define([
         '../Core/defined',
         '../Core/destroyObject',
         '../Core/DeveloperError',
-        '../Core/Geometry',
         '../Core/GeometryAttribute',
         '../Core/GeometryAttributes',
         '../Core/GeometryInstance',
@@ -29,7 +28,6 @@ define([
         defined,
         destroyObject,
         DeveloperError,
-        Geometry,
         GeometryAttribute,
         GeometryAttributes,
         GeometryInstance,
@@ -90,25 +88,24 @@ define([
         this.id = options.id;
         this._id = undefined;
 
-        this._primitive = undefined;
+        this._outlinePrimitive = undefined;
+        this._planesPrimitive = undefined;
     }
 
-    var frustumCornersNDC = new Array(8);
-    frustumCornersNDC[0] = new Cartesian4(-1.0, -1.0, -1.0, 1.0);
-    frustumCornersNDC[1] = new Cartesian4(1.0, -1.0, -1.0, 1.0);
-    frustumCornersNDC[2] = new Cartesian4(1.0, 1.0, -1.0, 1.0);
-    frustumCornersNDC[3] = new Cartesian4(-1.0, 1.0, -1.0, 1.0);
-    frustumCornersNDC[4] = new Cartesian4(-1.0, -1.0, 1.0, 1.0);
-    frustumCornersNDC[5] = new Cartesian4(1.0, -1.0, 1.0, 1.0);
-    frustumCornersNDC[6] = new Cartesian4(1.0, 1.0, 1.0, 1.0);
-    frustumCornersNDC[7] = new Cartesian4(-1.0, 1.0, 1.0, 1.0);
+    var frustumCornersNDC = new Array(4);
+    frustumCornersNDC[0] = new Cartesian4(-1.0, -1.0, 1.0, 1.0);
+    frustumCornersNDC[1] = new Cartesian4(1.0, -1.0, 1.0, 1.0);
+    frustumCornersNDC[2] = new Cartesian4(1.0, 1.0, 1.0, 1.0);
+    frustumCornersNDC[3] = new Cartesian4(-1.0, 1.0, 1.0, 1.0);
 
     var scratchMatrix = new Matrix4();
-    var scratchFrustumCorners = new Array(8);
-    for (var i = 0; i < 8; ++i) {
+    var scratchFrustumCorners = new Array(4);
+    for (var i = 0; i < 4; ++i) {
         scratchFrustumCorners[i] = new Cartesian4();
     }
 
+    var scratchColor = new Color();
+    var scratchSplits = [1.0, 100000.0];
     /**
      * @private
      */
@@ -119,24 +116,47 @@ define([
 
         if (this._updateOnChange) {
             // Recreate the primitive every frame
-            this._primitive = this._primitive && this._primitive.destroy();
+            this._outlinePrimitive = this._outlinePrimitive && this._outlinePrimitive.destroy();
+            this._planesPrimitive = this._planesPrimitive && this._planesPrimitive.destroy();
         }
 
-        if (!defined(this._primitive)) {
+        if (!defined(this._outlinePrimitive)) {
             var view = this._camera.viewMatrix;
             var projection = this._camera.frustum.projectionMatrix;
             var viewProjection = Matrix4.multiply(projection, view, scratchMatrix);
             var inverseViewProjection = Matrix4.inverse(viewProjection, scratchMatrix);
 
-            var positions = new Float64Array(8 * 3);
-            for (var i = 0; i < 8; ++i) {
-                var corner = Cartesian4.clone(frustumCornersNDC[i], scratchFrustumCorners[i]);
-                Matrix4.multiplyByVector(inverseViewProjection, corner, corner);
-                Cartesian3.divideByScalar(corner, corner.w, corner); // Handle the perspective divide
-                positions[i * 3] = corner.x;
-                positions[i * 3 + 1] = corner.y;
-                positions[i * 3 + 2] = corner.z;
+            var frustumSplits = frameState.frustumSplits;
+            var numFrustums = frustumSplits.length - 1;
+            if (numFrustums <= 0) {
+                frustumSplits = scratchSplits; // Use near and far planes if no splits created
+                frustumSplits[0] = this._camera.frustum.near;
+                frustumSplits[1] = this._camera.frustum.far;
+                numFrustums = 1;
             }
+
+            var positions = new Float64Array(3 * 4 * (numFrustums + 1));
+            var f;
+            for (f = 0; f < numFrustums + 1; ++f) {
+                for (var i = 0; i < 4; ++i) {
+                    var corner = Cartesian4.clone(frustumCornersNDC[i], scratchFrustumCorners[i]);
+
+                    Matrix4.multiplyByVector(inverseViewProjection, corner, corner);
+                    Cartesian3.divideByScalar(corner, corner.w, corner); // Handle the perspective divide
+                    Cartesian3.subtract(corner, this._camera.positionWC, corner);
+                    Cartesian3.normalize(corner, corner);
+
+                    var fac = Cartesian3.dot(this._camera.directionWC, corner);
+                    Cartesian3.multiplyByScalar(corner, frustumSplits[f] / fac, corner);
+                    Cartesian3.add(corner, this._camera.positionWC, corner);
+
+                    positions[12 * f + i * 3] = corner.x;
+                    positions[12 * f + i * 3 + 1] = corner.y;
+                    positions[12 * f + i * 3 + 2] = corner.z;
+                }
+            }
+
+            var boundingSphere = new BoundingSphere.fromVertices(positions);
 
             var attributes = new GeometryAttributes();
             attributes.position = new GeometryAttribute({
@@ -145,17 +165,47 @@ define([
                 values : positions
             });
 
-            var indices = new Uint16Array([0,1,1,2,2,3,3,0,0,4,4,7,7,3,7,6,6,2,2,1,1,5,5,4,5,6]);
-            var geometry = new Geometry({
-                attributes : attributes,
-                indices : indices,
-                primitiveType : PrimitiveType.LINES,
-                boundingSphere : new BoundingSphere.fromVertices(positions)
-            });
+            var offset, index;
 
-            this._primitive = new Primitive({
+            // Create the outline primitive
+            var outlineIndices = new Uint16Array(8 * (2 * numFrustums + 1));
+            // Build the far planes
+            for (f = 0; f < numFrustums + 1; ++f) {
+                offset = f * 8;
+                index = f * 4;
+
+                outlineIndices[offset] = index;
+                outlineIndices[offset + 1] = index + 1;
+                outlineIndices[offset + 2] = index + 1;
+                outlineIndices[offset + 3] = index + 2;
+                outlineIndices[offset + 4] = index + 2;
+                outlineIndices[offset + 5] = index + 3;
+                outlineIndices[offset + 6] = index + 3;
+                outlineIndices[offset + 7] = index;
+            }
+            // Build the sides of the frustums
+            for (f = 0; f < numFrustums; ++f) {
+                offset = (numFrustums + 1 + f) * 8;
+                index = f * 4;
+
+                outlineIndices[offset] = index;
+                outlineIndices[offset + 1] = index + 4;
+                outlineIndices[offset + 2] = index + 1;
+                outlineIndices[offset + 3] = index + 5;
+                outlineIndices[offset + 4] = index + 2;
+                outlineIndices[offset + 5] = index + 6;
+                outlineIndices[offset + 6] = index + 3;
+                outlineIndices[offset + 7] = index + 7;
+            }
+
+            this._outlinePrimitive = new Primitive({
                 geometryInstances : new GeometryInstance({
-                    geometry : geometry,
+                    geometry : {
+                        attributes : attributes,
+                        indices : outlineIndices,
+                        primitiveType : PrimitiveType.LINES,
+                        boundingSphere : boundingSphere
+                    },
                     attributes : {
                         color : ColorGeometryInstanceAttribute.fromColor(this._color)
                     },
@@ -168,9 +218,79 @@ define([
                 }),
                 asynchronous : false
             });
+
+            // Create the planes primitive
+            var planesIndices = new Uint16Array(6 * (5 * numFrustums + 1));
+            // Build the far planes
+            for (f = 0; f < numFrustums + 1; ++f) {
+                offset = f * 6;
+                index = f * 4;
+
+                planesIndices[offset] = index;
+                planesIndices[offset + 1] = index + 1;
+                planesIndices[offset + 2] = index + 2;
+                planesIndices[offset + 3] = index;
+                planesIndices[offset + 4] = index + 2;
+                planesIndices[offset + 5] = index + 3;
+            }
+            // Build the sides of the frustums
+            for (f = 0; f < numFrustums; ++f) {
+                offset = (numFrustums + 1 + 4 * f) * 6;
+                index = f * 4;
+
+                planesIndices[offset] = index + 4;
+                planesIndices[offset + 1] = index;
+                planesIndices[offset + 2] = index + 3;
+                planesIndices[offset + 3] = index + 4;
+                planesIndices[offset + 4] = index + 3;
+                planesIndices[offset + 5] = index + 7;
+
+                planesIndices[offset + 6] = index + 4;
+                planesIndices[offset + 7] = index;
+                planesIndices[offset + 8] = index + 1;
+                planesIndices[offset + 9] = index + 4;
+                planesIndices[offset + 10] = index + 1;
+                planesIndices[offset + 11] = index + 5;
+
+                planesIndices[offset + 12] = index + 7;
+                planesIndices[offset + 13] = index + 3;
+                planesIndices[offset + 14] = index + 2;
+                planesIndices[offset + 15] = index + 7;
+                planesIndices[offset + 16] = index + 2;
+                planesIndices[offset + 17] = index + 6;
+
+                planesIndices[offset + 18] = index + 6;
+                planesIndices[offset + 19] = index + 2;
+                planesIndices[offset + 20] = index + 1;
+                planesIndices[offset + 21] = index + 6;
+                planesIndices[offset + 22] = index + 1;
+                planesIndices[offset + 23] = index + 5;
+            }
+
+            this._planesPrimitive = new Primitive({
+                geometryInstances : new GeometryInstance({
+                    geometry : {
+                        attributes : attributes,
+                        indices : planesIndices,
+                        primitiveType : PrimitiveType.TRIANGLES,
+                        boundingSphere : boundingSphere
+                    },
+                    attributes : {
+                        color : ColorGeometryInstanceAttribute.fromColor(Color.fromAlpha(this._color, 0.1, scratchColor))
+                    },
+                    id : this.id,
+                    pickPrimitive : this
+                }),
+                appearance : new PerInstanceColorAppearance({
+                    translucent : true,
+                    flat : true
+                }),
+                asynchronous : false
+            });
         }
 
-        this._primitive.update(frameState);
+        this._outlinePrimitive.update(frameState);
+        this._planesPrimitive.update(frameState);
     };
 
     /**
@@ -207,7 +327,8 @@ define([
      * @see DebugCameraPrimitive#isDestroyed
      */
     DebugCameraPrimitive.prototype.destroy = function() {
-        this._primitive = this._primitive && this._primitive.destroy();
+        this._outlinePrimitive = this._outlinePrimitive && this._outlinePrimitive.destroy();
+        this._planesPrimitive = this._planesPrimitive && this._planesPrimitive.destroy();
         return destroyObject(this);
     };
 

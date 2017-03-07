@@ -1,31 +1,33 @@
 /*global defineSuite*/
 defineSuite([
         'Scene/Cesium3DTile',
-        'Scene/TileBoundingRegion',
-        'Scene/TileOrientedBoundingBox',
         'Core/Cartesian3',
         'Core/clone',
         'Core/defined',
+        'Core/HeadingPitchRoll',
         'Core/Math',
         'Core/Matrix3',
         'Core/Matrix4',
         'Core/Rectangle',
         'Core/SphereOutlineGeometry',
         'Core/Transforms',
+        'Scene/TileBoundingRegion',
+        'Scene/TileOrientedBoundingBox',
         'Specs/createScene'
     ], function(
         Cesium3DTile,
-        TileBoundingRegion,
-        TileOrientedBoundingBox,
         Cartesian3,
         clone,
         defined,
+        HeadingPitchRoll,
         CesiumMath,
         Matrix3,
         Matrix4,
         Rectangle,
         SphereOutlineGeometry,
         Transforms,
+        TileBoundingRegion,
+        TileOrientedBoundingBox,
         createScene) {
     'use strict';
 
@@ -101,6 +103,18 @@ defineSuite([
         }
     };
 
+    var tileWithViewerRequestVolume = {
+        geometricError : 1,
+        refine : 'replace',
+        children : [],
+        boundingVolume: {
+            box : [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0]
+        },
+        viewerRequestVolume : {
+            box : [0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 2.0]
+        }
+    };
+
     var tileWithInvalidExtension = {
         geometricError : 1,
         refine : 'replace',
@@ -115,6 +129,7 @@ defineSuite([
 
     var mockTileset = {
         debugShowBoundingVolume : true,
+        debugShowViewerRequestVolume : true,
         modelMatrix : Matrix4.IDENTITY
     };
 
@@ -123,7 +138,8 @@ defineSuite([
 
     function getTileTransform(longitude, latitude) {
         var transformCenter = Cartesian3.fromRadians(longitude, latitude, 0.0);
-        var transformMatrix = Transforms.headingPitchRollToFixedFrame(transformCenter, 0.0, 0.0, 0.0);
+        var hpr = new HeadingPitchRoll();
+        var transformMatrix = Transforms.headingPitchRollToFixedFrame(transformCenter, hpr);
         return Matrix4.pack(transformMatrix, new Array(16));
     }
 
@@ -240,6 +256,15 @@ defineSuite([
             expect(contentBoundingRegion.rectangle).toEqual(rectangle);
         });
 
+        it('tile transform affects viewer request volume', function() {
+            var header = clone(tileWithViewerRequestVolume, true);
+            header.transform = getTileTransform(centerLongitude, centerLatitude);
+            var tile = new Cesium3DTile(mockTileset, '/some_url', header, undefined);
+            var requestVolume = tile._viewerRequestVolume.boundingVolume;
+            var requestVolumeCenter = Cartesian3.fromRadians(centerLongitude, centerLatitude, 1.0);
+            expect(requestVolume.center).toEqualEpsilon(requestVolumeCenter, CesiumMath.EPSILON7);
+        });
+
         it('tile transform changes', function() {
             var mockTileset = {
                 modelMatrix : Matrix4.IDENTITY
@@ -285,6 +310,13 @@ defineSuite([
             var tile = new Cesium3DTile(mockTileset, '/some_url', tileWithBoundingSphere, undefined);
             tile.update(mockTileset, scene.frameState);
             expect(tile._debugBoundingVolume).toBeDefined();
+        });
+
+        it('creates debug bounding volume for viewer request volume', function() {
+            var scene = createScene();
+            var tile = new Cesium3DTile(mockTileset, '/some_url', tileWithViewerRequestVolume, undefined);
+            tile.update(mockTileset, scene.frameState);
+            expect(tile._debugViewerRequestVolume).toBeDefined();
         });
     });
 }, 'WebGL');
