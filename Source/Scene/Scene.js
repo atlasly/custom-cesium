@@ -1265,26 +1265,31 @@ define([
     }
 
     function updateFrustums(near, far, farToNearRatio, numFrustums, frustumCommandsList, is2D, nearToFarDistance2D) {
-        frustumCommandsList.length = numFrustums;
-        for (var m = 0; m < numFrustums; ++m) {
-            var curNear;
-            var curFar;
+        if (numFrustums >= 0) {
+            frustumCommandsList.length = numFrustums;
+            for (var m = 0; m < numFrustums; ++m) {
+                var curNear;
+                var curFar;
 
-            if (!is2D) {
-                curNear = Math.max(near, Math.pow(farToNearRatio, m) * near);
-                curFar = Math.min(far, farToNearRatio * curNear);
-            } else {
-                curNear = Math.min(far - nearToFarDistance2D, near + m * nearToFarDistance2D);
-                curFar = Math.min(far, curNear + nearToFarDistance2D);
-            }
+                if (!is2D) {
+                    curNear = Math.max(near, Math.pow(farToNearRatio, m) * near);
+                    curFar = Math.min(far, farToNearRatio * curNear);
+                } else {
+                    curNear = Math.min(far - nearToFarDistance2D, near + m * nearToFarDistance2D);
+                    curFar = Math.min(far, curNear + nearToFarDistance2D);
+                }
 
-            var frustumCommands = frustumCommandsList[m];
-            if (!defined(frustumCommands)) {
-                frustumCommands = frustumCommandsList[m] = new FrustumCommands(curNear, curFar);
-            } else {
-                frustumCommands.near = curNear;
-                frustumCommands.far = curFar;
+                var frustumCommands = frustumCommandsList[m];
+                if (!defined(frustumCommands)) {
+                    frustumCommands = frustumCommandsList[m] = new FrustumCommands(curNear, curFar);
+                } else {
+                    frustumCommands.near = curNear;
+                    frustumCommands.far = curFar;
+                }
             }
+        }
+        else {
+            console.error("Issue with rendering.  numFrustums = " + numFrustums);
         }
     }
 
