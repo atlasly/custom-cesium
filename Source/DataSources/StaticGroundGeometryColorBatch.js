@@ -196,16 +196,18 @@ define([
             var updater = showsUpdated[i];
             var instance = this.geometry.get(updater.entity.id);
 
-            var attributes = this.attributes.get(instance.id.id);
-            if (!defined(attributes)) {
-                attributes = primitive.getGeometryInstanceAttributes(instance.id);
-                this.attributes.set(instance.id.id, attributes);
-            }
+            if (instance) {
+                var attributes = this.attributes.get(instance.id.id);
+                if (!defined(attributes)) {
+                    attributes = primitive.getGeometryInstanceAttributes(instance.id);
+                    this.attributes.set(instance.id.id, attributes);
+                }
 
-            var show = updater.entity.isShowing;
-            var currentShow = attributes.show[0] === 1;
-            if (show !== currentShow) {
-                attributes.show = ShowGeometryInstanceAttribute.toValue(show, attributes.show);
+                var show = updater.entity.isShowing;
+                var currentShow = attributes.show[0] === 1;
+                if (show !== currentShow) {
+                    attributes.show = ShowGeometryInstanceAttribute.toValue(show, attributes.show);
+                }
             }
         }
         this.showsUpdated.removeAll();
