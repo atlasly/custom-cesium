@@ -2,6 +2,7 @@
 define([
         '../../Core/Cartesian3',
         '../../Core/Cartographic',
+        '../../Scene/Cesium3DTileFeature',
         '../../Scene/Cesium3DTileset',
         '../../Scene/Cesium3DTileStyle',
         '../../Scene/Cesium3DTileColorBlendMode',
@@ -19,6 +20,7 @@ define([
     ], function(
         Cartesian3,
         Cartographic,
+        Cesium3DTileFeature,
         Cesium3DTileset,
         Cesium3DTileStyle,
         Cesium3DTileColorBlendMode,
@@ -153,8 +155,13 @@ define([
                     return function(val) {
                         if (val) {
                             that._eventHandler.setInputAction(function(e) {
-                                that._feature = scene.pick(e.endPosition);
-                                that._updateStats(true);
+                                var picked = scene.pick(e.endPosition);
+                                if (picked instanceof Cesium3DTileFeature) {
+                                    that._feature = picked;
+                                    that._updateStats(true);
+                                } else {
+                                    that._feature = undefined;
+                                }
                             }, ScreenSpaceEventType.MOUSE_MOVE);
                         } else {
                             that._feature = undefined;
@@ -438,7 +445,6 @@ define([
             _feature: {
                 default: undefined,
                 subscribe: (function() {
-
                     var current;
                     var scratchColor = new Color();
                     var oldColor = new Color();
@@ -653,7 +659,8 @@ define([
                     '<li><strong>Features Selected: </strong>' + stats.numberOfFeaturesSelected.toLocaleString() + '</li>' +
                     '<li><strong>Features Loaded: </strong>' + stats.numberOfFeaturesLoaded.toLocaleString() + '</li>' +
                     '<li><strong>Points Selected: </strong>' + stats.numberOfPointsSelected.toLocaleString() + '</li>' +
-                    '<li><strong>Points Loaded: </strong>' + stats.numberOfPointsLoaded.toLocaleString() + '</li>';
+                    '<li><strong>Points Loaded: </strong>' + stats.numberOfPointsLoaded.toLocaleString() + '</li>' +
+                    '<li><strong>Triangles Selected: </strong>' + stats.numberOfTrianglesSelected.toLocaleString() + '</li>';
                 s += '</ul>';
                 s += '<ul class="cesium-cesiumInspector-stats">';
                 s +=
@@ -665,6 +672,13 @@ define([
                 s +=
                     // --- Optimization stats
                     '<li><strong>Children Union Culled: </strong>' + stats.numberOfTilesCulledWithChildrenUnion.toLocaleString() + '</li>';
+                s += '</ul>';
+                s += '<ul class="cesium-cesiumInspector-stats">';
+                s +=
+                    // --- Memory stats
+                    '<li><strong>Vertex Memory (MB): </strong>' + Math.round(stats.vertexMemorySizeInBytes / 1048576).toLocaleString() + '</li>' +
+                    '<li><strong>Texture Memory (MB): </strong>' + Math.round(stats.textureMemorySizeInBytes / 1048576).toLocaleString() + '</li>' +
+                    '<li><strong>Batch Table Memory (MB): </strong>' + Math.round(stats.batchTableMemorySizeInBytes / 1048576).toLocaleString() + '</li>';
                 s += '</ul>';
             }
 
